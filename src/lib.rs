@@ -84,7 +84,7 @@ impl DhtValue {
 
 pub struct DhtSensor {
     pin: Box<dyn GenericPin>,
-    delay: Box<dyn DelayUs<u8>>,
+    delay: Box<dyn DelayUs<u32>>,
     dht_type: DhtType,
     value: [u8; 5],
 }
@@ -93,89 +93,32 @@ pub struct DhtSensor {
 /// - https://github.com/adafruit/DHT-sensor-library/blob/master/DHT.cpp
 /// - https://github.com/adafruit/Adafruit_Python_DHT/blob/master/source/Raspberry_Pi/pi_dht_read.c
 impl DhtSensor {
-    pub fn new(pin: Box<dyn GenericPin>, dht_type: DhtType) -> DhtSensor {
+    pub fn new(pin: Box<dyn GenericPin>, delay: Box<dyn DelayUs<u32>>, dht_type: DhtType) -> DhtSensor {
          DhtSensor {
             pin: pin,
+            delay: delay,
             dht_type: dht_type,
             value: [0; 5],
         }
     }
 
-
-    /// Try read sensor untill attempts limits will be reached.
-    /// Repeat reading only on errorrs with little delay between reads.
     ///
-    /// * `attempts` - Number of additional read attempts
-    /// * `cache_sec` - Allow cached results acqured N seconds before
-    pub fn read_until(&mut self, attempts: u8, cache_sec: u8) -> Result<DhtValue, IoError> {
-        if Instant::now() - self.last_read < Duration::from_secs(cache_sec as u64) {
-            return Ok(DhtValue {
-                value: self.value,
-                dht_type: self.dht_type.clone(),
-            });
-        }
-
-        let mut res: Result<DhtValue, IoError> = Err(IoError::from(IoErrorKind::Other));
-        let max_attempts = 1 + attempts;
-        for i in 0..max_attempts {
-            match self.read() {
-                Ok(r) => {
-                    return Ok(r);
-                }
-                Err(e) => {
-                    // Sleep only on timout error
-                    if e.kind() == IoErrorKind::TimedOut && i < (max_attempts - 1) {
-                        thread::sleep(Duration::from_millis(150));
-                    }
-                    res = Err(e);
-                }
-            }
-        }
-        res
-    }
-
-    /// Read sensor in nice way.
-    /// Will return recently cached value for frequently requests.
-    /// On error can return value cached about 1 minute ago, to avoid unecessary errors in result.
-    pub fn read(&mut self) -> Result<DhtValue, DhtError> {
-        let raw_value = self.read_raw();
-        if raw_value.is_ok() {
-            return raw_value;
-        }
-
-        // Handle errors
-        let cached_for = Instant::now() - self.last_read;
-        return if cached_for <= Duration::from_secs(CACHE_ON_ERROR) {
-            // Just return previously cached data assuming that temperature
-            // delta for 2 secons is not huge
-            Ok(DhtValue {
-                value: self.value,
-                dht_type: self.dht_type.clone(),
-            })
-        } else {
-            raw_value
-        };
-    }
-
-    /// Raw read from DHT sensor.
     /// Return result and data readed from sensor.
-    /// Even on errors data can be not empty
-    fn read_raw(&mut self) -> Result<DhtValue, DhtError> {
+    /// This sensors are buggy and errors are usual, sometimes errors are more common than success response.
+    /// 
+    fn read(&mut self) -> Result<DhtValue, DhtError> {
         // Initialize variables
         let mut err: Option<DhtError> = None;
         let mut data: [u8; 5] = [0; 5]; // Set 40 bits of received data to zero.
         let mut cycles: [u32; 83] = [0; 83];
-        //let read_limit = Instant::now() + Duration::from_millis(10);
 
         // Send start signal.  See DHT datasheet for full signal diagram:
-        //   http://www.adafruit.com/datasheets/Digital%20humidity%20and%20temperature%20sensor%20AM2302.pdf
+        // http://www.adafruit.com/datasheets/Digital%20humidity%20and%20temperature%20sensor%20AM2302.pdf
         // Go into high impedence state to let pull-up raise data line level and
         // start the reading process.
 
-        //          self.gpio.direction_output(1);
-        //          thread::sleep(Duration::from_millis(250));
-
-        let pino = self.pin.output();
+        let mut pino = self.pin.output();
+        self.delay.delay_us(250_000);
 
         // Time critical section begins
         // Voltage  level  from  high to  low.
@@ -188,50 +131,50 @@ impl DhtSensor {
         drop(pino);
         let pini = self.pin.input();
         
-            // MCU will pull up voltage and wait 20-40us for DHT’s response
-            // Delay a bit to let sensor pull data line low.
+        // MCU will pull up voltage and wait 20-40us for DHT’s response
+        // Delay a bit to let sensor pull data line low.
 
-            // READ to cycles[0] - or skip to next
+        // READ to cycles[0] - or skip to next
 
-            // Now start reading the data line to get the value from the DHT sensor.
-            // First expect a low signal for ~80 microseconds followed by a high signal
-            // for ~80 microseconds again.
+        // Now start reading the data line to get the value from the DHT sensor.
+        // First expect a low signal for ~80 microseconds followed by a high signal
+        // for ~80 microseconds again.
 
-            // READ to cycles[1] and cycles[2]
+        // READ to cycles[1] and cycles[2]
 
-            // Now read the 40 bits sent by the sensor.  Each bit is sent as a 50
-            // microsecond low pulse followed by a variable length high pulse.  If the
-            // high pulse is ~28 microseconds then it's a 0 and if it's ~70 microseconds
-            // then it's a 1.  We measure the cycle count of the initial 50us low pulse
-            // and use that to compare to the cycle count of the high pulse to determine
-            // if the bit is a 0 (high state cycle count < low state cycle count), or a
-            // 1 (high state cycle count > low state cycle count). Note that for speed all
-            // the pulses are read into a array and then examined in a later step.
+        // Now read the 40 bits sent by the sensor.  Each bit is sent as a 50
+        // microsecond low pulse followed by a variable length high pulse.  If the
+        // high pulse is ~28 microseconds then it's a 0 and if it's ~70 microseconds
+        // then it's a 1.  We measure the cycle count of the initial 50us low pulse
+        // and use that to compare to the cycle count of the high pulse to determine
+        // if the bit is a 0 (high state cycle count < low state cycle count), or a
+        // 1 (high state cycle count > low state cycle count). Note that for speed all
+        // the pulses are read into a array and then examined in a later step.
 
-            // READ to cycles[3+] as low level and cycles[4+] as high level
+        // READ to cycles[3+] as low level and cycles[4+] as high level
 
-            let mut i = 0;
-            let mut x = 0;
-            // Max cycles considering delay
-            let max_cycles = 1200;
-            while i < 83 {
-                let v = pini.is_high();
-                if (i % 2 == 0) == v {
-                    // Instead of reading time we just count number of cycles until next level value
-                    cycles[i] += 1;
-                } else {
-                    i += 1;
-                }
-                // Delay value entagled with max_cycles
-                self.delay.delay_us(5);
-
-                // Check timeout
-                x += 1;
-                if x > max_cycles {
-                    err = Some(DhtError::Readings);
-                    break;
-                }
+        let mut i = 0;
+        let mut x = 0;
+        // Max cycles considering delay
+        let max_cycles = 1200;
+        while i < 83 {
+            let v = pini.is_high();
+            if (i % 2 == 0) == v {
+                // Instead of reading time we just count number of cycles until next level value
+                cycles[i] += 1;
+            } else {
+                i += 1;
             }
+            // Delay value entagled with max_cycles
+            self.delay.delay_us(5);
+
+            // Check timeout
+            x += 1;
+            if x > max_cycles {
+                err = Some(DhtError::Readings);
+                break;
+            }
+        }
 
         drop(pini);
 
