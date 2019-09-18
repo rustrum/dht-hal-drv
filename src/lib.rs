@@ -1,6 +1,3 @@
-#![crate_type = "lib"]
-#![crate_name = "dht_hal"]
-
 #![no_std]
 #[macro_use(block)]
 extern crate nb;
