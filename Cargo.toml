@@ -1,5 +1,5 @@
 [package]
-name = "hal-drv-dht"
+name = "dht-hal-drv"
 version = "0.1.0"
 authors = ["Rumato Estorsky <rumatoest@users.noreply.github.com>"]
 edition = "2018"

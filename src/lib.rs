@@ -1,5 +1,5 @@
-// #![crate_type = "lib"]
-// #![crate_name = "gpio_sensors"]
+#![crate_type = "lib"]
+#![crate_name = "dht_hal"]
 
 #![no_std]
 #[macro_use(block)]
