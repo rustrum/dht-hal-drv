@@ -9,13 +9,19 @@ use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal::timer::{CountDown};
 use embedded_hal::blocking::delay::DelayUs;
 
+///
+/// We need to use one pin in input and output mode.
+/// Right now embedded_hal does not provide such interface,
+/// thus it should be done on application side.
+/// 
 pub trait GenericPin {
 
-    fn input(&self) -> Box<dyn InputPin>;
+    /// Return InputPin or fail with nothing
+    fn input(&self) -> Result<Box<dyn InputPin>, ()>;
 
-    fn output(&self) -> Box<dyn OutputPin>;
+    /// Return OutputPin or fail with nothing
+    fn output(&self) -> Result<Box<dyn OutputPin>, ()>;
 }
-
 
 ///
 /// Determines DHT sensor types.
@@ -33,6 +39,8 @@ pub enum DhtError {
     Readings,
     /// Data was read but checksum validation falied
     Checksum,
+    /// Error reading pin values or acquire pin etc.
+    IO
 }
 
 ///
@@ -114,7 +122,8 @@ impl DhtSensor {
         // Go into high impedence state to let pull-up raise data line level and
         // start the reading process.
 
-        let mut pino = self.pin.output();
+        let mut pino = self.pin.output().map_err(|_| DhtError::IO)?;
+        
         self.delay.delay_us(250_000);
 
         // Time critical section begins
@@ -126,7 +135,7 @@ impl DhtSensor {
         self.delay.delay_us(20_000);
 
         drop(pino);
-        let pini = self.pin.input();
+        let pini = self.pin.input().map_err(|_| DhtError::IO)?;
         
         // MCU will pull up voltage and wait 20-40us for DHT’s response
         // Delay a bit to let sensor pull data line low.
