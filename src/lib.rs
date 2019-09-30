@@ -5,22 +5,31 @@ extern crate alloc;
 use alloc::boxed::Box;
 use core::prelude::v1::Result;
 
-use embedded_hal::digital::{InputPin, OutputPin};
-use embedded_hal::timer::{CountDown};
 use embedded_hal::blocking::delay::DelayUs;
+use embedded_hal::digital::v2::{InputPin, OutputPin};
+use embedded_hal::timer::CountDown;
 
 ///
 /// We need to use one pin in input and output mode.
 /// Right now embedded_hal does not provide such interface,
 /// thus it should be done on application side.
-/// 
+///
 pub trait GenericPin {
-
     /// Return InputPin or fail with nothing
-    fn input(&self) -> Result<Box<dyn InputPin>, ()>;
+    fn input(&self) -> Result<&dyn InputPin<Error = ()>, ()>;
 
     /// Return OutputPin or fail with nothing
-    fn output(&self) -> Result<Box<dyn OutputPin>, ()>;
+    fn output(&self) -> Result<&mut dyn OutputPin<Error = ()>, ()>;
+}
+
+#[derive(Debug)]
+pub enum DhtError {
+    /// Unable to read data from sensor
+    Readings,
+    /// Data was read but checksum validation falied
+    Checksum,
+    /// Error reading pin values or acquire pin etc.
+    IO,
 }
 
 ///
@@ -31,16 +40,6 @@ pub enum DhtType {
     DHT11,
     DHT21,
     DHT22,
-}
-
-#[derive(Debug)]
-pub enum DhtError {
-    /// Unable to read data from sensor
-    Readings,
-    /// Data was read but checksum validation falied
-    Checksum,
-    /// Error reading pin values or acquire pin etc.
-    IO
 }
 
 ///
@@ -86,7 +85,6 @@ impl DhtValue {
     }
 }
 
-
 pub struct DhtSensor {
     pin: Box<dyn GenericPin>,
     delay: Box<dyn DelayUs<u32>>,
@@ -98,8 +96,12 @@ pub struct DhtSensor {
 /// - https://github.com/adafruit/DHT-sensor-library/blob/master/DHT.cpp
 /// - https://github.com/adafruit/Adafruit_Python_DHT/blob/master/source/Raspberry_Pi/pi_dht_read.c
 impl DhtSensor {
-    pub fn new(pin: Box<dyn GenericPin>, delay: Box<dyn DelayUs<u32>>, dht_type: DhtType) -> DhtSensor {
-         DhtSensor {
+    pub fn new(
+        pin: Box<dyn GenericPin>,
+        delay: Box<dyn DelayUs<u32>>,
+        dht_type: DhtType,
+    ) -> DhtSensor {
+        DhtSensor {
             pin: pin,
             delay: delay,
             dht_type: dht_type,
@@ -110,7 +112,7 @@ impl DhtSensor {
     ///
     /// Return result and data readed from sensor.
     /// This sensors are buggy and errors are usual, sometimes errors are more common than success response.
-    /// 
+    ///
     fn read(&mut self) -> Result<DhtValue, DhtError> {
         // Initialize variables
         let mut err: Option<DhtError> = None;
@@ -123,20 +125,17 @@ impl DhtSensor {
         // start the reading process.
 
         let mut pino = self.pin.output().map_err(|_| DhtError::IO)?;
-        
         self.delay.delay_us(250_000);
 
         // Time critical section begins
         // Voltage  level  from  high to  low.
         // This process must take at least 18ms to ensure DHT’s detection of MCU's signal.
-        
         pino.set_low();
 
         self.delay.delay_us(20_000);
 
         drop(pino);
         let pini = self.pin.input().map_err(|_| DhtError::IO)?;
-        
         // MCU will pull up voltage and wait 20-40us for DHT’s response
         // Delay a bit to let sensor pull data line low.
 
@@ -164,7 +163,7 @@ impl DhtSensor {
         // Max cycles considering delay
         let max_cycles = 1200;
         while i < 83 {
-            let v = pini.is_high();
+            let v = pini.is_high().map_err(|_| DhtError::IO)?;
             if (i % 2 == 0) == v {
                 // Instead of reading time we just count number of cycles until next level value
                 cycles[i] += 1;
@@ -222,7 +221,7 @@ impl DhtSensor {
                 dht_type: self.dht_type.clone(),
             })
         } else {
-           Err(err.unwrap_or(DhtError::Checksum))
+            Err(err.unwrap_or(DhtError::Checksum))
         }
     }
 }
@@ -232,7 +231,6 @@ impl DhtSensor {
 //         write!(f, "DHT ({:?} pin:{})", self.dht_type, self.pin)
 //     }
 // }
-
 
 #[cfg(test)]
 mod tests {

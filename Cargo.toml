@@ -6,4 +6,4 @@ edition = "2018"
 
 [dependencies]
 # nb = "0.1.2"
-embedded-hal = { version = "0.2.2", features = ["unproven"] }
+embedded-hal = { version = "0.2.3", features = ["unproven"] }
