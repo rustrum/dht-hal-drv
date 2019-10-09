@@ -1,26 +1,7 @@
 #![no_std]
-// #[macro_use(block)]
-// extern crate nb;
-extern crate alloc;
-use alloc::boxed::Box;
 use core::prelude::v1::Result;
 
-use embedded_hal::blocking::delay::DelayUs;
 use embedded_hal::digital::v2::{InputPin, OutputPin};
-use embedded_hal::timer::CountDown;
-
-///
-/// We need to use one pin in input and output mode.
-/// Right now embedded_hal does not provide such interface,
-/// thus it should be done on application side.
-///
-pub trait GenericPin {
-    /// Return InputPin or fail with nothing
-    fn input(&self) -> Result<&dyn InputPin<Error = ()>, ()>;
-
-    /// Return OutputPin or fail with nothing
-    fn output(&self) -> Result<&mut dyn OutputPin<Error = ()>, ()>;
-}
 
 #[derive(Debug)]
 pub enum DhtError {
@@ -85,152 +66,154 @@ impl DhtValue {
     }
 }
 
-pub struct DhtSensor {
-    pin: Box<dyn GenericPin>,
-    delay: Box<dyn DelayUs<u32>>,
-    dht_type: DhtType,
-    value: [u8; 5],
+///
+/// Initialize DHT sensor (sending start signal) to start readings.
+///
+/// # Arguments
+///
+/// * `output_pin` - Output pin trait for DHT data pin
+/// * `initial_delay` - Use initial delay with hight impedance state
+/// * `delay_us' - Closure where you should call appropriate delay/sleep/whatewer API with nanoseconds as input
+///
+pub fn dht_init<Error>(
+    output_pin: &mut dyn OutputPin<Error = Error>,
+    initial_delay: bool,
+    delay_us: &mut dyn FnMut(u16) -> (),
+) -> Result<(), DhtError> {
+    // See DHT datasheet for full signal diagram:
+    // http://www.adafruit.com/datasheets/Digital%20humidity%20and%20temperature%20sensor%20AM2302.pdf
+
+    // Go into high impedence state to let pull-up raise data line level and
+    // start the reading process.
+    if initial_delay {
+        output_pin.set_high().map_err(|e| DhtError::IO)?;
+        // Need to have delay at least for 250ms
+        // But I want simplify API and use only delay in us
+        // Some HW implementations are not able to use u32 as delay parameter
+        // So I have to do it in such strange way
+        let dus = 62_500_u16;
+        delay_us(dus);
+        delay_us(dus);
+        delay_us(dus);
+        delay_us(dus);
+    }
+
+    // Time critical section begins
+    // Voltage  level  from  high to  low.
+    // This process must take at least 18ms to ensure DHT’s detection of MCU's signal.
+    output_pin.set_low().map_err(|e| DhtError::IO)?;
+
+    delay_us(20_000);
+    Ok(())
 }
 
-/// Ideas about DHT reading sensors was found here:
+///
+/// Return result and data readed from sensor.
+/// This sensors are buggy and errors are usual,
+/// sometimes errors are more common case than success response.
+///
+/// Ideas how to read DHT was acquired from here:
 /// - https://github.com/adafruit/DHT-sensor-library/blob/master/DHT.cpp
 /// - https://github.com/adafruit/Adafruit_Python_DHT/blob/master/source/Raspberry_Pi/pi_dht_read.c
-impl DhtSensor {
-    pub fn new(
-        pin: Box<dyn GenericPin>,
-        delay: Box<dyn DelayUs<u32>>,
-        dht_type: DhtType,
-    ) -> DhtSensor {
-        DhtSensor {
-            pin: pin,
-            delay: delay,
-            dht_type: dht_type,
-            value: [0; 5],
+pub fn dht_read<Error>(
+    dht: DhtType,
+    input_pin: &mut dyn InputPin<Error = Error>,
+    delay_us: &mut dyn FnMut(u16) -> (),
+) -> Result<DhtValue, DhtError> {
+    // Initialize variables
+    let mut err: Option<DhtError> = None;
+    let mut data: [u8; 5] = [0; 5]; // Set 40 bits of received data to zero.
+    let mut cycles: [u32; 83] = [0; 83];
+
+    // MCU will pull up voltage and wait 20-40us for DHT’s response
+    // Delay a bit to let sensor pull data line low.
+
+    // READ to cycles[0] - or skip to next
+
+    // Now start reading the data line to get the value from the DHT sensor.
+    // First expect a low signal for ~80 microseconds followed by a high signal
+    // for ~80 microseconds again.
+
+    // READ to cycles[1] and cycles[2]
+
+    // Now read the 40 bits sent by the sensor.  Each bit is sent as a 50
+    // microsecond low pulse followed by a variable length high pulse.  If the
+    // high pulse is ~28 microseconds then it's a 0 and if it's ~70 microseconds
+    // then it's a 1.  We measure the cycle count of the initial 50us low pulse
+    // and use that to compare to the cycle count of the high pulse to determine
+    // if the bit is a 0 (high state cycle count < low state cycle count), or a
+    // 1 (high state cycle count > low state cycle count). Note that for speed all
+    // the pulses are read into a array and then examined in a later step.
+
+    // READ to cycles[3+] as low level and cycles[4+] as high level
+
+    let mut i = 0;
+    let mut x = 0;
+    // Max cycles considering delay
+    // let max_cycles = 2_147_483_647;
+    let max_cycles = 1_000_000;
+    while i < 83 {
+        // let v = input_pin.is_high().map_err(|_| DhtError::IO)?;
+        // let high = input_pin.is_high().unwrap_or(false);
+        let low = input_pin.is_low().unwrap_or(true);
+        // if (i % 2 == 0) == high {
+        if (i % 2 == 0) != low {
+            // Instead of reading time we just count number of cycles until next level value
+            cycles[i] += 1;
+        } else {
+            i += 1;
+        }
+
+        // Delay value entagled with max_cycles
+        //delay_us(1);
+
+        // Check timeout
+        x += 1;
+        if x > max_cycles {
+            err = Some(DhtError::Readings);
+            break;
         }
     }
 
-    ///
-    /// Return result and data readed from sensor.
-    /// This sensors are buggy and errors are usual, sometimes errors are more common than success response.
-    ///
-    fn read(&mut self) -> Result<DhtValue, DhtError> {
-        // Initialize variables
-        let mut err: Option<DhtError> = None;
-        let mut data: [u8; 5] = [0; 5]; // Set 40 bits of received data to zero.
-        let mut cycles: [u32; 83] = [0; 83];
+    // Inspect pulses and determine which ones are 0 (high state cycle count < low
+    // state cycle count), or 1 (high state cycle count > low state cycle count).
+    // We skip first 3 values because there is no\t data there
+    for i in 0..40 {
+        let low_cycle = cycles[2 * i + 3];
+        let high_cycle = cycles[2 * i + 4];
 
-        // Send start signal.  See DHT datasheet for full signal diagram:
-        // http://www.adafruit.com/datasheets/Digital%20humidity%20and%20temperature%20sensor%20AM2302.pdf
-        // Go into high impedence state to let pull-up raise data line level and
-        // start the reading process.
-
-        let mut pino = self.pin.output().map_err(|_| DhtError::IO)?;
-        self.delay.delay_us(250_000);
-
-        // Time critical section begins
-        // Voltage  level  from  high to  low.
-        // This process must take at least 18ms to ensure DHT’s detection of MCU's signal.
-        pino.set_low();
-
-        self.delay.delay_us(20_000);
-
-        drop(pino);
-        let pini = self.pin.input().map_err(|_| DhtError::IO)?;
-        // MCU will pull up voltage and wait 20-40us for DHT’s response
-        // Delay a bit to let sensor pull data line low.
-
-        // READ to cycles[0] - or skip to next
-
-        // Now start reading the data line to get the value from the DHT sensor.
-        // First expect a low signal for ~80 microseconds followed by a high signal
-        // for ~80 microseconds again.
-
-        // READ to cycles[1] and cycles[2]
-
-        // Now read the 40 bits sent by the sensor.  Each bit is sent as a 50
-        // microsecond low pulse followed by a variable length high pulse.  If the
-        // high pulse is ~28 microseconds then it's a 0 and if it's ~70 microseconds
-        // then it's a 1.  We measure the cycle count of the initial 50us low pulse
-        // and use that to compare to the cycle count of the high pulse to determine
-        // if the bit is a 0 (high state cycle count < low state cycle count), or a
-        // 1 (high state cycle count > low state cycle count). Note that for speed all
-        // the pulses are read into a array and then examined in a later step.
-
-        // READ to cycles[3+] as low level and cycles[4+] as high level
-
-        let mut i = 0;
-        let mut x = 0;
-        // Max cycles considering delay
-        let max_cycles = 1200;
-        while i < 83 {
-            let v = pini.is_high().map_err(|_| DhtError::IO)?;
-            if (i % 2 == 0) == v {
-                // Instead of reading time we just count number of cycles until next level value
-                cycles[i] += 1;
-            } else {
-                i += 1;
-            }
-            // Delay value entagled with max_cycles
-            self.delay.delay_us(5);
-
-            // Check timeout
-            x += 1;
-            if x > max_cycles {
-                err = Some(DhtError::Readings);
-                break;
-            }
+        data[i / 8] <<= 1;
+        if high_cycle > low_cycle {
+            // High cycles are greater than 50us low cycle count, must be a 1.
+            data[i / 8] |= 1;
         }
+        // Else high cycles are less than (or equal to, a weird case) the 50us low
+        // cycle count so this must be a zero.  Nothing needs to be changed in the
+        // stored data.
+    }
 
-        drop(pini);
+    // #[cfg(feature = "debug_trace")]
+    // {
+    //     print!("DHT readings: ");
+    //     print!("{:X} {:X} {:X} {:X}", data[0], data[1], data[2], data[3]);
+    //     println!(
+    //         "  {:X} == {:X} (checksum)",
+    //         data[4],
+    //         (data[0] as u16 + data[1] as u16 + data[2] as u16 + data[3] as u16) & 0xFF
+    //     );
+    // }
 
-        // Inspect pulses and determine which ones are 0 (high state cycle count < low
-        // state cycle count), or 1 (high state cycle count > low state cycle count).
-        // We skip first 3 values because there is not data there
-        for i in 0..40 {
-            let low_cycle = cycles[2 * i + 3];
-            let high_cycle = cycles[2 * i + 4];
-
-            data[i / 8] <<= 1;
-            if high_cycle > low_cycle {
-                // High cycles are greater than 50us low cycle count, must be a 1.
-                data[i / 8] |= 1;
-            }
-            // Else high cycles are less than (or equal to, a weird case) the 50us low
-            // cycle count so this must be a zero.  Nothing needs to be changed in the
-            // stored data.
-        }
-
-        #[cfg(feature = "debug_trace")]
-        {
-            print!("DHT readings: ");
-            print!("{:X} {:X} {:X} {:X}", data[0], data[1], data[2], data[3]);
-            println!(
-                "  {:X} == {:X} (checksum)",
-                data[4],
-                (data[0] as u16 + data[1] as u16 + data[2] as u16 + data[3] as u16) & 0xFF
-            );
-        }
-
-        // Check we read 40 bits and that the checksum matches.
-        if data[4] as u16
-            == ((data[0] as u16 + data[1] as u16 + data[2] as u16 + data[3] as u16) & 0xFF)
-        {
-            self.value = data;
-            Ok(DhtValue {
-                value: data,
-                dht_type: self.dht_type.clone(),
-            })
-        } else {
-            Err(err.unwrap_or(DhtError::Checksum))
-        }
+    // Check we read 40 bits and that the checksum matches.
+    let checksum = (data[0] as u16 + data[1] as u16 + data[2] as u16 + data[3] as u16) & 0xFF;
+    if data[4] as u16 == checksum {
+        Ok(DhtValue {
+            value: data,
+            dht_type: dht,
+        })
+    } else {
+        Err(err.unwrap_or(DhtError::Checksum))
     }
 }
-
-// impl fmt::Debug for DhtSensor {
-//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-//         write!(f, "DHT ({:?} pin:{})", self.dht_type, self.pin)
-//     }
-// }
 
 #[cfg(test)]
 mod tests {
