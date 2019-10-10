@@ -1,8 +1,20 @@
+//!
+//! 
+//! 
+//! 
+//! Ideas how to read DHT was acquired from here:
+//! - [Adafruit DHT.cpp](https://github.com/adafruit/DHT-sensor-library/blob/master/DHT.cpp)
+//! - [Adafruit python lib pi_dht_read.c](https://github.com/adafruit/Adafruit_Python_DHT/blob/master/source/Raspberry_Pi/pi_dht_read.c)
+//! - [Full signals diagrams for DHT](http://www.adafruit.com/datasheets/Digital%20humidity%20and%20temperature%20sensor%20AM2302.pdf).
+//! 
 #![no_std]
 use core::prelude::v1::Result;
 
 use embedded_hal::digital::v2::{InputPin, OutputPin};
 
+///
+/// You sould receive this in a case of some upleasant situation.
+///
 #[derive(Debug)]
 pub enum DhtError {
     /// Unable to read data from sensor
@@ -14,7 +26,7 @@ pub enum DhtError {
 }
 
 ///
-/// Determines DHT sensor types.
+/// Describe available DHT sensor types.
 ///
 #[derive(Debug, Clone)]
 pub enum DhtType {
@@ -33,12 +45,8 @@ pub struct DhtValue {
 }
 
 impl DhtValue {
-    /// Return temperature readings in Fahrenheit.
-    pub fn temperature_f(&self) -> f32 {
-        self.temperature() * 1.8 + 32.0
-    }
-
-    /// Return temperature readings in Celcius.
+    /// Return temperature readings in Celsius.
+    /// All raw data from DHT sensor are related to this scale.
     pub fn temperature(&self) -> f32 {
         match &self.dht_type {
             DHT11 => self.value[2] as f32,
@@ -51,6 +59,12 @@ impl DhtValue {
                 v
             }
         }
+    }
+
+    /// Convert temperature readings from Celsius to Fahrenheit
+    /// for those who love to use piffle scales and measurements.
+    pub fn temperature_f(&self) -> f32 {
+        self.temperature() * 1.8 + 32.0
     }
 
     /// Return humidity readins in percents.
@@ -68,38 +82,24 @@ impl DhtValue {
 
 ///
 /// Initialize DHT sensor (sending start signal) to start readings.
+///
+/// Notice that there have to be about 1 sec delay before each reading (between calling `dht_init`).
+/// At this period data pin should be pulled up by resistor connected to DHT
+/// which is default connection scheme for DHT.
+/// It implies that pin should be set in input floating mode after previous reading.
+///
 /// In Adafruit drivers you can see that there is inital delay with hight impedance for about 500-700ms.
-/// You do not need this delay if you read sensor not often and do other logic between readings
-/// including delays in other part of your code.
+/// You do not need this delay if you read sensor not to often and do other logic between readings.
 ///
 /// # Arguments
 ///
 /// * `output_pin` - Output pin trait for DHT data pin.
-/// * `initial_delay` - Use initial delay with hight impedance state (In most cases should set to false).
-/// * `delay_us' - Closure where you should call appropriate delay/sleep/whatewer API with microseconds as input.
+/// * `delay_us` - Closure where you should call appropriate delay/sleep/whatewer API with microseconds as input.
 ///
-/// See DHT datasheet for full signal diagram:
-/// http://www.adafruit.com/datasheets/Digital%20humidity%20and%20temperature%20sensor%20AM2302.pdf
 pub fn dht_init<Error>(
     output_pin: &mut dyn OutputPin<Error = Error>,
-    initial_delay: bool,
     delay_us: &mut dyn FnMut(u16) -> (),
 ) -> Result<(), DhtError> {
-    // Go into high impedence state to let pull-up raise data line level and
-    // start the reading process.
-    if initial_delay {
-        output_pin.set_high().map_err(|e| DhtError::IO)?;
-        // Need to have delay at least for 250ms
-        // I want simplify API and use only closure with microseconds delay
-        // Some HW implementations are not able to use u32 as delay parameter
-        // That is why we have this nice cycle here
-        let dus = 62_500_u16;
-        for _ in 0..4 {
-            delay_us(dus);
-        }
-    }
-
-    // Time critical section begins
     // Voltage  level  from  high to  low.
     // This process must take at least 18ms to ensure DHT’s detection of MCU's signal.
     output_pin.set_low().map_err(|_| DhtError::IO)?;
@@ -109,9 +109,7 @@ pub fn dht_init<Error>(
 }
 
 ///
-/// Return result and data readed from sensor.
-/// This sensors are buggy and errors are usual,
-/// sometimes errors are more common case than success response.
+/// Call this immediately after [initialization](fn.dht_init.html) to acquire proper sensor readings.
 ///
 /// # Arguments
 ///
@@ -120,12 +118,6 @@ pub fn dht_init<Error>(
 /// * `delay_us' - Closure with delay/sleep/whatewer API with microseconds as input,
 /// NOTE that for low frequency CPUS (about 2Mhz or less) you should pass empty closure.
 ///
-/// See DHT datasheet for full signal diagram:
-/// http://www.adafruit.com/datasheets/Digital%20humidity%20and%20temperature%20sensor%20AM2302.pdf
-///
-/// Ideas how to read DHT was acquired from here:
-/// - https://github.com/adafruit/DHT-sensor-library/blob/master/DHT.cpp
-/// - https://github.com/adafruit/Adafruit_Python_DHT/blob/master/source/Raspberry_Pi/pi_dht_read.c
 pub fn dht_read<Error>(
     dht: DhtType,
     input_pin: &mut dyn InputPin<Error = Error>,

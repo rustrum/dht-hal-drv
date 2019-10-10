@@ -70,6 +70,7 @@ fn main() -> ! {
                 hprintln!("DHT ERROR {:?}", err);
             }
         };
+        delay.delay_ms(1_000_u32);
     }
 }
 
@@ -83,7 +84,7 @@ fn read_dht(
     // Convert pin to input
     let mut pin_out = pin.into_push_pull_output(cr);
     // Initialize DHT data transfer
-    let init = dht_init(&mut pin_out, false, &mut delay_us);
+    let init = dht_init(&mut pin_out, &mut delay_us);
     if init.is_err() {
         // You can skip this error check if you like
         return (Err(init.err().unwrap()), pin_out.into_floating_input(cr));
