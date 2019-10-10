@@ -81,7 +81,7 @@ fn read_dht(
 ) -> (Result<DhtValue, DhtError>, DhtHwPin) {
     // Implement custom HW specific delay logic that DHT driver is not aware of
     let mut delay_us = |d| delay.delay_us(d);
-    // Convert pin to input
+    // Convert pin to output
     let mut pin_out = pin.into_push_pull_output(cr);
     // Initialize DHT data transfer
     let init = dht_init(&mut pin_out, &mut delay_us);

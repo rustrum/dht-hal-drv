@@ -1,15 +1,64 @@
+//! # HAL based driver for Digital Humidity and Temperature sensors (DHT)
 //!
-//! 
-//! 
-//! 
-//! Ideas how to read DHT was acquired from here:
+//! Because some limitations in HAL API leads to limitations in HW implementations
+//! using this sensor **is some kind of tricky**.
+//!
+//! DHT using one pin for communication and this pin must be switched between input/output modes.
+//! Before reading begins MCU must send signal to DHT which would initiate data transfer from DHT.
+//!
+//! Also DHT initialization process has some caveats.
+//! There have to be near 1 sec delay after previous read.
+//! During this delay pull-up resitor in DHT module (as it's required according to dataheet) would pull up data pin.
+//!
+//! This is why reading process from DHT was splitted in two functions.
+//! You have to switch pin to output mode first, initialize DHT, switch pin to input mode and then read DHT data.
+//!
+//! ## Example
+//!
+//! I assume that you would wrap reading logic in function or something.
+//!
+//! ```
+//! use dht_hal_drv::{dht_init, dht_read, DhtError, DhtType, DhtValue};
+//!
+//! // Other code of yours //
+//!
+//! let delay; // Something that impelements DelayUs trait
+//! let pin_in; // Pin configured as input floating
+//!
+//! // Should create closure with
+//! // custom HW specific delay logic that DHT driver is not aware of
+//! let mut delay_us = |d| delay.delay_us(d);
+//!
+//! // pin to output mode
+//! let mut pin_out = pin_in.into_push_pull_output();
+//!
+//! // Initializubg DHT data transfer
+//! dht_init(&mut pin_out, &mut delay_us);
+//!
+//! // You can check dht_init response for errors if you whant
+//!
+//! // WARNING there should be no additional logic between dht_init and dht_read
+//!
+//! // Should convert pin back to input
+//! let mut pin_in = pin_out.into_floating_input(cr);
+//!
+//! // Now let's read some data
+//! let readings = dht_read(DhtType::DHT11, &mut pin_in, &mut delay_us);
+//!
+//! // Other code of yours //
+//!
+//! ```
+//!
+//! Working examples for particular HW platforms could be found in source repository.
+//!
+//! ## Inspiration sources
+//!
 //! - [Adafruit DHT.cpp](https://github.com/adafruit/DHT-sensor-library/blob/master/DHT.cpp)
 //! - [Adafruit python lib pi_dht_read.c](https://github.com/adafruit/Adafruit_Python_DHT/blob/master/source/Raspberry_Pi/pi_dht_read.c)
 //! - [Full signals diagrams for DHT](http://www.adafruit.com/datasheets/Digital%20humidity%20and%20temperature%20sensor%20AM2302.pdf).
-//! 
+//!
 #![no_std]
 use core::prelude::v1::Result;
-
 use embedded_hal::digital::v2::{InputPin, OutputPin};
 
 ///
@@ -116,7 +165,7 @@ pub fn dht_init<Error>(
 /// * `dht` - Dht sensor type
 /// * `input_pin` - Input pin trait for DHT data pin
 /// * `delay_us' - Closure with delay/sleep/whatewer API with microseconds as input,
-/// NOTE that for low frequency CPUS (about 2Mhz or less) you should pass empty closure.
+/// NOTE that for low frequency CPUs (about 2Mhz or less) you should pass empty closure.
 ///
 pub fn dht_read<Error>(
     dht: DhtType,
@@ -148,16 +197,23 @@ pub fn dht_read<Error>(
     // 1 (high state cycle count > low state cycle count). Note that for speed all
     // the pulses are read into a array and then examined in a later step.
 
-    // Max cont of cycles considering that one cycle takes about 1-2us
+    // READ to cycles[3+] as low level and cycles[4+] as high level
+
+    // Maximum acceptable count of reading cycles. Considering that one cycle does not complete less in 1-3us.
     let max_cycles = (50 + 70) * 80 + 80 * 3;
 
-    // Delay in microseconds which should help us to slow down "while" cycle time.
-    // If "wile" cycle would be faster than 1us it would cause errors because of max_cycles constraint.
+    // Delay in microseconds which should help us to slow down "while" cycles.
+    // If "while" cycle would be faster than 1us it would cause errors because of max_cycles constraint.
     let delay_us_value = 3;
 
     let mut i = 0;
     let mut x = 0;
-    // READ to cycles[3+] as low level and cycles[4+] as high level
+
+    // As I can see at least 10 instructions should be executed at each cycle.
+    // Approximately if CPU frequency is 8MHz and IPC value is 1 than
+    // 28us would match to 22 loop cycles without using any delay.
+    // For 1MHz CPU it is about 2 full cycles.
+    // NOTICE for slow CPU you should not implement `delay_us` this closure should do nothing.
     while i < 83 {
         let high = input_pin.is_high().map_err(|_| DhtError::IO)?;
         if (i % 2 == 0) == high {
@@ -167,7 +223,7 @@ pub fn dht_read<Error>(
             i += 1;
         }
 
-        // Delay value entagled with max_cycles
+        // Reasonable delay for fast CPU
         delay_us(delay_us_value);
 
         // Check timeout
