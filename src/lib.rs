@@ -68,40 +68,41 @@ impl DhtValue {
 
 ///
 /// Initialize DHT sensor (sending start signal) to start readings.
+/// In Adafruit drivers you can see that there is inital delay with hight impedance for about 500-700ms.
+/// You do not need this delay if you read sensor not often and do other logic between readings 
+/// including delays in other part of your code.
 ///
 /// # Arguments
 ///
 /// * `output_pin` - Output pin trait for DHT data pin
 /// * `initial_delay` - Use initial delay with hight impedance state
-/// * `delay_us' - Closure where you should call appropriate delay/sleep/whatewer API with nanoseconds as input
+/// * `delay_us' - Closure where you should call appropriate delay/sleep/whatewer API with microseconds as input
 ///
+/// See DHT datasheet for full signal diagram:
+/// http://www.adafruit.com/datasheets/Digital%20humidity%20and%20temperature%20sensor%20AM2302.pdf
 pub fn dht_init<Error>(
     output_pin: &mut dyn OutputPin<Error = Error>,
     initial_delay: bool,
     delay_us: &mut dyn FnMut(u16) -> (),
 ) -> Result<(), DhtError> {
-    // See DHT datasheet for full signal diagram:
-    // http://www.adafruit.com/datasheets/Digital%20humidity%20and%20temperature%20sensor%20AM2302.pdf
-
     // Go into high impedence state to let pull-up raise data line level and
     // start the reading process.
     if initial_delay {
         output_pin.set_high().map_err(|e| DhtError::IO)?;
         // Need to have delay at least for 250ms
-        // But I want simplify API and use only delay in us
+        // I want simplify API and use only closure with microseconds delay
         // Some HW implementations are not able to use u32 as delay parameter
-        // So I have to do it in such strange way
+        // That is why we have this nice cycle here
         let dus = 62_500_u16;
-        delay_us(dus);
-        delay_us(dus);
-        delay_us(dus);
-        delay_us(dus);
+        for _ in 0..4 {
+            delay_us(dus);
+        }
     }
 
     // Time critical section begins
     // Voltage  level  from  high to  low.
     // This process must take at least 18ms to ensure DHT’s detection of MCU's signal.
-    output_pin.set_low().map_err(|e| DhtError::IO)?;
+    output_pin.set_low().map_err(|_| DhtError::IO)?;
 
     delay_us(20_000);
     Ok(())
@@ -111,6 +112,16 @@ pub fn dht_init<Error>(
 /// Return result and data readed from sensor.
 /// This sensors are buggy and errors are usual,
 /// sometimes errors are more common case than success response.
+///
+/// # Arguments
+///
+/// * `dht` - Dht sensor type
+/// * `input_pin` - Input pin trait for DHT data pin
+/// * `delay_us' - Closure with delay/sleep/whatewer API with microseconds as input,
+/// NOTE that for low frequency CPUS (about 2Mhz or less) you should pass empty closure.
+///
+/// See DHT datasheet for full signal diagram:
+/// http://www.adafruit.com/datasheets/Digital%20humidity%20and%20temperature%20sensor%20AM2302.pdf
 ///
 /// Ideas how to read DHT was acquired from here:
 /// - https://github.com/adafruit/DHT-sensor-library/blob/master/DHT.cpp
@@ -145,13 +156,16 @@ pub fn dht_read<Error>(
     // 1 (high state cycle count > low state cycle count). Note that for speed all
     // the pulses are read into a array and then examined in a later step.
 
-    // READ to cycles[3+] as low level and cycles[4+] as high level
+    // Max cont of cycles considering that one cycle takes about 1-2us
+    let max_cycles = (50 + 70) * 80 + 80 * 3;
+
+    // Delay in microseconds which should help us to slow down "while" cycle time.
+    // If "wile" cycle would be faster than 1us it would cause errors because of max_cycles constraint.
+    let delay_us_value = 3;
 
     let mut i = 0;
     let mut x = 0;
-    // Max cycles considering delay
-    // let max_cycles = 2_147_483_647;
-    let max_cycles = 1_000_000;
+    // READ to cycles[3+] as low level and cycles[4+] as high level
     while i < 83 {
         // let v = input_pin.is_high().map_err(|_| DhtError::IO)?;
         // let high = input_pin.is_high().unwrap_or(false);
@@ -165,7 +179,7 @@ pub fn dht_read<Error>(
         }
 
         // Delay value entagled with max_cycles
-        //delay_us(1);
+        delay_us(delay_us_value);
 
         // Check timeout
         x += 1;
@@ -212,13 +226,5 @@ pub fn dht_read<Error>(
         })
     } else {
         Err(err.unwrap_or(DhtError::Checksum))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
     }
 }

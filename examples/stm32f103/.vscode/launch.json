@@ -20,6 +20,23 @@
             //  Enable debug output.
             "printCalls": false,
             "showDevDebugOutput": false,
+        },
+        {
+            "name": "Release (STM32 Blue Pill Rust)",
+            "type": "gdb",
+            "request": "launch",
+            "target": "target/thumbv7m-none-eabi/release/stm32f103",
+            "cwd": "${workspaceRoot}",
+            "gdbpath": "/usr/bin/gdb-multiarch",
+            "debugger_args": [
+                "-x",
+                "loader.gdb"
+            ],
+            //  For debugger display, don't interpret values returned by gdb.
+            "valuesFormatting": "disabled",
+            //  Enable debug output.
+            "printCalls": false,
+            "showDevDebugOutput": false,
         }
     ]
 }
