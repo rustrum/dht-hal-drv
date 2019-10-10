@@ -4,30 +4,22 @@
 
 use panic_halt as _;
 
-// use nb::block;
-
-// extern crate void;
-// use void::Void;
-
 use cortex_m_rt::entry;
 use cortex_m_semihosting::hprintln;
 use stm32f1xx_hal::{
     delay::Delay,
     gpio,
-    gpio::{Floating, Input, Output, PushPull},
+    gpio::{Floating, Input},
     pac,
     prelude::*,
-    // timer::Timer,
 };
 
 use dht_hal_drv::{dht_init, dht_read, DhtError, DhtType, DhtValue};
-use embedded_hal::digital::v2::{InputPin, OutputPin};
+use embedded_hal::digital::v2::OutputPin;
 
-type DhtHwOutPin = gpio::gpiob::PB9<Output<PushPull>>;
+// Define types for DHT interface
+type DhtHwPin = gpio::gpiob::PB9<Input<Floating>>;
 type DhtHwPinCr = gpio::gpiob::CRH;
-
-// type DhtHwOutPin = gpio::gpioc::PC15<Output<PushPull>>;
-// type DhtHwPinCr = gpio::gpioc::CRH;
 
 #[entry]
 fn main() -> ! {
@@ -44,17 +36,7 @@ fn main() -> ! {
 
     // Freeze the configuration of all the clocks in the system and store
     // the frozen frequencies in `clocks`
-    let clocks = rcc.cfgr
-    // .use_hse(4.mhz())
-    // .hclk(4.mhz())
-    // .pclk2
-    .freeze(&mut flash.acr);
-
-    hprintln!(
-        "Freq sysclk {}Hz  bclk2 {}Hz",
-        clocks.sysclk().0,
-        clocks.pclk2().0
-    );
+    let clocks = rcc.cfgr.freeze(&mut flash.acr);
 
     // Acquire the GPIOC peripheral
     let mut gpioc = dp.GPIOC.split(&mut rcc.apb2);
@@ -66,51 +48,62 @@ fn main() -> ! {
     // let mut timer = Timer::syst(cp.SYST, 1.hz(), clocks);
     let mut delay = Delay::new(cp.SYST, clocks);
 
-    // Configure DHT pins
+    // DHT pin config
     let mut gpiob = dp.GPIOB.split(&mut rcc.apb2);
-    let mut dht_pin: DhtHwOutPin = gpiob.pb9.into_push_pull_output(&mut gpiob.crh);
+    let mut dht_pin: DhtHwPin = gpiob.pb9.into_floating_input(&mut gpiob.crh);
 
-    // let mut dht_pin: DhtHwOutPin = gpioc.pc15.into_push_pull_output(&mut gpioc.crh);
     loop {
-        // block!(timer.wait()).unwrap();
-        delay.delay_ms(1000_u32);
-        led.set_high();
-
-        hprintln!("LED is ON {}", "dd");
-
-        let (result, pout) = read_dht(dht_pin, &mut gpiob.crh, &mut delay);
+        let (readings, pout) = read_dht(dht_pin, &mut gpiob.crh, &mut delay);
         dht_pin = pout;
-        dht_pin.set_high();
-        // dht_pin = read_dht(dht_pin, &mut gpiob.crh, &mut delay);
 
-        match result {
-            Ok(res) => hprintln!("DHT readins {}C {}%", res.temperature(), res.humidity()),
-            Err(err) => hprintln!("DHT ERROR {:?}", err),
+        match readings {
+            Ok(res) => {
+                // Long blinks if everything is OK
+                led_blink(&mut led, &mut delay, 250);
+                hprintln!("DHT readins {}C {}%", res.temperature(), res.humidity());
+            }
+            Err(err) => {
+                // Short blinks on errors
+                for _ in 0..10 {
+                    led_blink(&mut led, &mut delay, 25);
+                }
+                hprintln!("DHT ERROR {:?}", err);
+            }
         };
-
-        // block!(timer.wait()).unwrap();
-        // delay.delay_ms(1000_u32);
-        led.set_low();
-        hprintln!("LED is OFF");
     }
 }
 
 fn read_dht(
-    mut pin: DhtHwOutPin,
+    pin: DhtHwPin,
     cr: &mut DhtHwPinCr,
     delay: &mut Delay,
-) -> (Result<DhtValue, DhtError>, DhtHwOutPin) {
-    // Implement custom HW specific delay logic that DHT libraray is not aware of
+) -> (Result<DhtValue, DhtError>, DhtHwPin) {
+    // Implement custom HW specific delay logic that DHT driver is not aware of
     let mut delay_us = |d| delay.delay_us(d);
-
-    let init = dht_init(&mut pin, false, &mut delay_us);
-    //You can skip this error check if you like
+    // Convert pin to input
+    let mut pin_out = pin.into_push_pull_output(cr);
+    // Initialize DHT data transfer
+    let init = dht_init(&mut pin_out, false, &mut delay_us);
     if init.is_err() {
-        return (Err(init.err().unwrap()), pin);
+        // You can skip this error check if you like
+        return (Err(init.err().unwrap()), pin_out.into_floating_input(cr));
     }
-    let mut input = pin.into_floating_input(cr);
-    (
-        dht_read(DhtType::DHT11, &mut input, &mut delay_us),
-        input.into_push_pull_output(cr),
-    )
+
+    // WARNING there should be no additional logic between dht_init and dht_read
+
+    // Should convert pin back to input
+    let mut pin_in = pin_out.into_floating_input(cr);
+    // Now let's read some data
+    let readings = dht_read(DhtType::DHT11, &mut pin_in, &mut delay_us);
+    // We must return reading + pin together
+    // because of tricky stm32f1xx_hal implementation
+    // where you can have only one pin instance at a time
+    (readings, pin_in)
+}
+
+fn led_blink<Error>(pin: &mut dyn OutputPin<Error = Error>, delay: &mut Delay, ms: u32) {
+    pin.set_high();
+    delay.delay_ms(ms);
+    pin.set_low();
+    delay.delay_ms(ms);
 }

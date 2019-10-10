@@ -69,14 +69,14 @@ impl DhtValue {
 ///
 /// Initialize DHT sensor (sending start signal) to start readings.
 /// In Adafruit drivers you can see that there is inital delay with hight impedance for about 500-700ms.
-/// You do not need this delay if you read sensor not often and do other logic between readings 
+/// You do not need this delay if you read sensor not often and do other logic between readings
 /// including delays in other part of your code.
 ///
 /// # Arguments
 ///
-/// * `output_pin` - Output pin trait for DHT data pin
-/// * `initial_delay` - Use initial delay with hight impedance state
-/// * `delay_us' - Closure where you should call appropriate delay/sleep/whatewer API with microseconds as input
+/// * `output_pin` - Output pin trait for DHT data pin.
+/// * `initial_delay` - Use initial delay with hight impedance state (In most cases should set to false).
+/// * `delay_us' - Closure where you should call appropriate delay/sleep/whatewer API with microseconds as input.
 ///
 /// See DHT datasheet for full signal diagram:
 /// http://www.adafruit.com/datasheets/Digital%20humidity%20and%20temperature%20sensor%20AM2302.pdf
@@ -167,11 +167,8 @@ pub fn dht_read<Error>(
     let mut x = 0;
     // READ to cycles[3+] as low level and cycles[4+] as high level
     while i < 83 {
-        // let v = input_pin.is_high().map_err(|_| DhtError::IO)?;
-        // let high = input_pin.is_high().unwrap_or(false);
-        let low = input_pin.is_low().unwrap_or(true);
-        // if (i % 2 == 0) == high {
-        if (i % 2 == 0) != low {
+        let high = input_pin.is_high().map_err(|_| DhtError::IO)?;
+        if (i % 2 == 0) == high {
             // Instead of reading time we just count number of cycles until next level value
             cycles[i] += 1;
         } else {
