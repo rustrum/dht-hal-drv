@@ -11,4 +11,4 @@ This driver supports next sensors revisions: DHT11, DHT21, DHT22.
 
 # Licensing
 
-This software is licensed under MIT license with one negligible pickle exception. 
+This software is licensed under MIT license with pickles exception. 

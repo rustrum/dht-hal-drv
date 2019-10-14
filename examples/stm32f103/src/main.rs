@@ -14,7 +14,7 @@ use stm32f1xx_hal::{
     prelude::*,
 };
 
-use dht_hal_drv::{dht_init, dht_read, DhtError, DhtType, DhtValue};
+use dht_hal_drv::{dht_read, dht_split_init, dht_split_read, DhtError, DhtType, DhtValue};
 use embedded_hal::digital::v2::OutputPin;
 
 // Define types for DHT interface
@@ -50,11 +50,18 @@ fn main() -> ! {
 
     // DHT pin config
     let mut gpiob = dp.GPIOB.split(&mut rcc.apb2);
-    let mut dht_pin: DhtHwPin = gpiob.pb9.into_floating_input(&mut gpiob.crh);
+    //let mut dht_pin: DhtHwPin = gpiob.pb9.into_floating_input(&mut gpiob.crh);
+
+    let mut dht_open_drain = gpiob.pb9.into_open_drain_output(&mut gpiob.crh);
 
     loop {
-        let (readings, pout) = read_dht(dht_pin, &mut gpiob.crh, &mut delay);
-        dht_pin = pout;
+        // Open/Drain emulation
+        //let (readings, pout) = read_dht_splitted(dht_pin, &mut gpiob.crh, &mut delay);
+        //dht_pin = pout;
+
+        let readings = dht_read(DhtType::DHT11, &mut dht_open_drain, &mut |d| {
+            delay.delay_us(d)
+        });
 
         match readings {
             Ok(res) => {
@@ -74,7 +81,9 @@ fn main() -> ! {
     }
 }
 
-fn read_dht(
+
+/// Example of reading using open drain pin emulation
+fn read_dht_splitted(
     pin: DhtHwPin,
     cr: &mut DhtHwPinCr,
     delay: &mut Delay,
@@ -84,7 +93,7 @@ fn read_dht(
     // Convert pin to output
     let mut pin_out = pin.into_push_pull_output(cr);
     // Initialize DHT data transfer
-    let init = dht_init(&mut pin_out, &mut delay_us);
+    let init = dht_split_init(&mut pin_out, &mut delay_us);
     if init.is_err() {
         // You can skip this error check if you like
         return (Err(init.err().unwrap()), pin_out.into_floating_input(cr));
@@ -95,7 +104,7 @@ fn read_dht(
     // Should convert pin back to input
     let mut pin_in = pin_out.into_floating_input(cr);
     // Now let's read some data
-    let readings = dht_read(DhtType::DHT11, &mut pin_in, &mut delay_us);
+    let readings = dht_split_read(DhtType::DHT11, &mut pin_in, &mut delay_us);
     // We must return reading + pin together
     // because of tricky stm32f1xx_hal implementation
     // where you can have only one pin instance at a time

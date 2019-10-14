@@ -1,26 +1,43 @@
 //! # HAL based driver for Digital Humidity and Temperature sensors (DHT)
 //!
-//! Because some limitations in HAL API leads to limitations in HW implementations
+//! Because of some limitations in HAL API and limitations in some HW implementations
 //! using this sensor **is some kind of tricky**.
 //!
-//! DHT using one pin for communication and this pin must be switched between input/output modes.
-//! Before reading begins MCU must send signal to DHT which would initiate data transfer from DHT.
+//! DHT use one pin for communication that should work in open drain (open connect) mode. 
+//! You should to emulate such pin behavior for hardware that does not have such pin implementations.
 //!
-//! Also DHT initialization process has some caveats.
-//! There have to be near 1 sec delay after previous read.
-//! During this delay pull-up resitor in DHT module (as it's required according to dataheet) would pull up data pin.
+//! This is there are several approaches to read data:
+//! * you can get readings using single function
+//! * you can use splitted functions for initialization and reading and convert pin to different modes between calls
+//! 
+//! Should notice that DHT initialization process has some caveats.
+//! There have to be near 1 sec delay before next reading.
+//! At his time pull-up resistor in DHT circuit would pull up data pin and this would prepare DHT for next reading cycle.
+//! 
+//! ## Examples
 //!
-//! This is why reading process from DHT was splitted in two functions.
-//! You have to switch pin to output mode first, initialize DHT, switch pin to input mode and then read DHT data.
+//! ### Using open drain pin
+//! 
+//! ```
+//! let delay; // Something that implements DelayUs trait
+//! let open_drain_pin; // Open drain pin, should be in open mode by default
+//! // Need to create closure with HW specific delay logic that DHT driver is not aware of
+//! let mut delay_us = |d| delay.delay_us(d);
+//! 
+//! // ... Some code of your APP ... //
+//! let result = dht_read(DhtType::DHT11, &mut open_drain_pin, &mut delay_us);
+//! // ... Other code of your APP ... //
+//! ```
 //!
-//! ## Example
+//! ### Using dht_split_* functions
 //!
-//! I assume that you would wrap reading logic in function or something.
+//! Such approach is useful if you your device does not have open drain pin and you need to emulate it
+//! or you have slow CPU and do not want to use delays while reading.
 //!
 //! ```
-//! use dht_hal_drv::{dht_init, dht_read, DhtError, DhtType, DhtValue};
+//! use dht_hal_drv::{dht_split_init, dht_split_read, DhtError, DhtType, DhtValue};
 //!
-//! // Other code of yours //
+//! // ... Some code of your APP ... //
 //!
 //! let delay; // Something that impelements DelayUs trait
 //! let pin_in; // Pin configured as input floating
@@ -33,19 +50,21 @@
 //! let mut pin_out = pin_in.into_push_pull_output();
 //!
 //! // Initializubg DHT data transfer
-//! dht_init(&mut pin_out, &mut delay_us);
+//! // Before reading begins MCU must send signal to DHT which would initiate data transfer from DHT.
+//! dht_split_init(&mut pin_out, &mut delay_us);
 //!
-//! // You can check dht_init response for errors if you whant
+//! // You can check dht_split_init response for errors if you want
 //!
-//! // WARNING there should be no additional logic between dht_init and dht_read
+//! // WARNING there should be no additional logic between dht_split_init and dht_split_read
 //!
-//! // Should convert pin back to input
+//! // Should convert pin back to input floating
 //! let mut pin_in = pin_out.into_floating_input(cr);
 //!
 //! // Now let's read some data
-//! let readings = dht_read(DhtType::DHT11, &mut pin_in, &mut delay_us);
+//! // Here you can pass empty delay_us closure to skip using delays on slow CPU
+//! let readings = dht_split_read(DhtType::DHT11, &mut pin_in, &mut delay_us);
 //!
-//! // Other code of yours //
+//! // ... Other code of your APP ... //
 //!
 //! ```
 //!
@@ -130,44 +149,74 @@ impl DhtValue {
 }
 
 ///
+/// Read DHT sensor via open drain (open collector) pin or its emulation.
+///
+///
+/// DHT sensor communication designed to use open drain like pin with pull up resistor.
+/// Some hardware does not have open drain pins but it is possible to emulate it
+/// in this case set_high() should convert pin into input floating mode.
+///
+/// If you have slow CPU clocks speed you may need to read data without delays at all.
+/// Thus you should use `dht_split_*` functions instead and pass an empty closure to `dht_split_read`.
+///
+/// # Arguments
+///
+/// * `dht` - DHT sensor type we are reading
+/// * `open_pin` - Open drain like pin
+/// * `delay_us` - Closure where you should call appropriate delay/sleep/whatever API with microseconds as input.
+///
+pub fn dht_read<IO_PIN>(
+    dht: DhtType,
+    open_pin: &mut IO_PIN,
+    delay_us: &mut dyn FnMut(u16) -> (),
+) -> Result<DhtValue, DhtError>
+where
+    IO_PIN: InputPin + OutputPin,
+{
+    dht_split_init(open_pin, delay_us)?;
+    // Toggle open drain pin to open (high) state.
+    open_pin.set_high().map_err(|_| DhtError::IO)?;
+    dht_split_read(dht, open_pin, delay_us)
+}
+
+///
 /// Initialize DHT sensor (sending start signal) to start readings.
 ///
-/// Notice that there have to be about 1 sec delay before each reading (between calling `dht_init`).
+/// Notice that there have to be about 1 sec delay before each reading (between calling `dht_split_init`).
 /// At this period data pin should be pulled up by resistor connected to DHT
 /// which is default connection scheme for DHT.
 /// It implies that pin should be set in input floating mode after previous reading.
 ///
-/// In Adafruit drivers you can see that there is inital delay with hight impedance for about 500-700ms.
+/// In Adafruit drivers you can see that there is initial delay with high impedance for about 500-700ms.
 /// You do not need this delay if you read sensor not to often and do other logic between readings.
 ///
 /// # Arguments
 ///
 /// * `output_pin` - Output pin trait for DHT data pin.
-/// * `delay_us` - Closure where you should call appropriate delay/sleep/whatewer API with microseconds as input.
+/// * `delay_us` - Closure where you should call appropriate delay/sleep/whatever API with microseconds as input.
 ///
-pub fn dht_init<Error>(
+pub fn dht_split_init<Error>(
     output_pin: &mut dyn OutputPin<Error = Error>,
     delay_us: &mut dyn FnMut(u16) -> (),
 ) -> Result<(), DhtError> {
     // Voltage  level  from  high to  low.
     // This process must take at least 18ms to ensure DHT’s detection of MCU's signal.
     output_pin.set_low().map_err(|_| DhtError::IO)?;
-
     delay_us(20_000);
     Ok(())
 }
 
 ///
-/// Call this immediately after [initialization](fn.dht_init.html) to acquire proper sensor readings.
+/// Call this immediately after [initialization](fn.dht_split_init.html) to acquire proper sensor readings.
 ///
 /// # Arguments
 ///
-/// * `dht` - Dht sensor type
+/// * `dht` - DHT sensor type
 /// * `input_pin` - Input pin trait for DHT data pin
-/// * `delay_us' - Closure with delay/sleep/whatewer API with microseconds as input,
+/// * `delay_us' - Closure with delay/sleep/whatever API with microseconds as input,
 /// NOTE that for low frequency CPUs (about 2Mhz or less) you should pass empty closure.
 ///
-pub fn dht_read<Error>(
+pub fn dht_split_read<Error>(
     dht: DhtType,
     input_pin: &mut dyn InputPin<Error = Error>,
     delay_us: &mut dyn FnMut(u16) -> (),
