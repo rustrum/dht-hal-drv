@@ -8,6 +8,8 @@ are widely used especially in different kind of DIY projects.
 
 This driver supports next sensors revisions: DHT11, DHT21, DHT22.
 
+I have tested it on Raspberry Pi 3 and STM32 Blue Pill board.
+All platform specific implementations are available in examples directory.
 
 # Licensing
 
