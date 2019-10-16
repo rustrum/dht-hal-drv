@@ -4,7 +4,7 @@
 //! using this sensor **is some kind of tricky**.
 //!
 //! DHT use one pin for communication that should work in open drain (open connect) mode.
-//! You should to emulate such pin behavior for hardware that does not have such pin implementations.
+//! You should to emulate such pin behaviour for hardware that does not have such pin implementations.
 //!
 //! This is there are several approaches to read data:
 //! * you can get readings using single function
@@ -13,6 +13,11 @@
 //! Should notice that DHT initialization process has some caveats.
 //! There have to be near 1 sec delay before next reading.
 //! At his time pull-up resistor in DHT circuit would pull up data pin and this would prepare DHT for next reading cycle.
+//!
+//! Delay implementation issues should be taken into account.
+//! On some platforms sleep at some amount of microseconds means "sleep at least N us".
+//! For example on RPi with `std::thread::sleep` nothing would work.
+//! For such case should use `dht_split_read` without delay or another sleep implementations like `spin_sleep`.
 //!
 //! ## Examples
 //!
@@ -207,7 +212,7 @@ pub fn dht_split_init<Error>(
 }
 
 ///
-/// Call this immediately after [initialization](fn.dht_split_init.html) to acquire proper sensor readings.
+/// Call this function immediately after [initialization](fn.dht_split_init.html) to acquire proper sensor readings.
 ///
 /// # Arguments
 ///
@@ -226,12 +231,14 @@ pub fn dht_split_read<Error>(
     // On RPi 3 without delays max "while" cycles per pin state is about 500, initial cycle is about 100
     // Thus if "while" would stuck at 20*100 cycles on initial cycle it would case an error
     // or if it would stuck at 500*100 somewhere in the middle.
-    // With delays we should have less than 20 cycles per pin state.
+    // With delays we should have about 20 cycles per pin state.
     dht_split_read_customizable(dht, input_pin, delay_us, threshold, rate)
 }
 
 ///
-/// Call this immediately after [initialization](fn.dht_split_init.html) to acquire proper sensor readings.
+/// Advanced customizable read function, you probably would not need to use it directly.
+/// Call it immediately after [initialization](fn.dht_split_init.html) to acquire proper sensor readings.
+///
 ///
 /// # Arguments
 ///
@@ -281,12 +288,11 @@ pub fn dht_split_read_customizable<Error>(
     let mut threshold = reads_threshold;
 
     // As I can see at least 10 instructions should be executed at each cycle.
-    // Approximately if CPU frequency is 8MHz and IPC value is 1 than
-    // 28us would match to 22 loop cycles without using any delay.
-    // With delay 3us it have to be about 8 cycles.
-    // For 1MHz CPU it is about 2 full cycles.
-    // NOTICE for slow CPU you should not implement `delay_us` this closure should do nothing.
-    // This delay would a
+    // If CPU frequency is 8MHz and IPC value is 1 than 28us
+    // would approximately match up to 22 loop cycles without using any delay.
+    // With delay of 2us it have to be about 8 cycles.
+    // For 1MHz CPU it is about 2 cycles.
+    // NOTICE for slow CPU you should not implement `delay_us` this closure should be empty.
     let delay_us_value = 2;
     let mut i = 0;
     while i < 83 {
@@ -332,18 +338,7 @@ pub fn dht_split_read_customizable<Error>(
 
     // DEBUG CODE, works only with std enabled
     // {
-    //     println!(
-    //         "Cycles {:?}",
-    //         cycles
-    //             .iter()
-    //             .map(ToString::to_string)
-    //             .collect::<Vec<String>>()
-    //             .join(", ")
-    //     );
-    // }
-
-    // #[cfg(feature = "debug_trace")]
-    // {
+    //     println!("Cycles {:?}",cycles.iter().map(ToString::to_string).collect::<Vec<String>>().join(", "));
     //     print!("DHT readings: ");
     //     print!("{:X} {:X} {:X} {:X}", data[0], data[1], data[2], data[3]);
     //     println!(
