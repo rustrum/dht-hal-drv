@@ -9,7 +9,7 @@ doctest = false
 
 [dependencies]
 void = {version ="1.0.2", default-features = false }
-dht-hal-drv = { version="0.1.0", path  = "../../", features = [] }
+dht-hal-drv = { version="0.2.0", path  = "../../", features = [] }
 embedded-hal = { version = "0.2.3", features = ["unproven"] }
 nb = "0.1.2"
 panic-halt = "0.2.0"

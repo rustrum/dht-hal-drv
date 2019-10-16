@@ -3,27 +3,27 @@
 //! Because of some limitations in HAL API and limitations in some HW implementations
 //! using this sensor **is some kind of tricky**.
 //!
-//! DHT use one pin for communication that should work in open drain (open connect) mode. 
+//! DHT use one pin for communication that should work in open drain (open connect) mode.
 //! You should to emulate such pin behavior for hardware that does not have such pin implementations.
 //!
 //! This is there are several approaches to read data:
 //! * you can get readings using single function
 //! * you can use splitted functions for initialization and reading and convert pin to different modes between calls
-//! 
+//!
 //! Should notice that DHT initialization process has some caveats.
 //! There have to be near 1 sec delay before next reading.
 //! At his time pull-up resistor in DHT circuit would pull up data pin and this would prepare DHT for next reading cycle.
-//! 
+//!
 //! ## Examples
 //!
 //! ### Using open drain pin
-//! 
+//!
 //! ```
 //! let delay; // Something that implements DelayUs trait
 //! let open_drain_pin; // Open drain pin, should be in open mode by default
 //! // Need to create closure with HW specific delay logic that DHT driver is not aware of
 //! let mut delay_us = |d| delay.delay_us(d);
-//! 
+//!
 //! // ... Some code of your APP ... //
 //! let result = dht_read(DhtType::DHT11, &mut open_drain_pin, &mut delay_us);
 //! // ... Other code of your APP ... //
@@ -39,7 +39,7 @@
 //!
 //! // ... Some code of your APP ... //
 //!
-//! let delay; // Something that impelements DelayUs trait
+//! let delay; // Something that implements DelayUs trait
 //! let pin_in; // Pin configured as input floating
 //!
 //! // Should create closure with
@@ -49,7 +49,7 @@
 //! // pin to output mode
 //! let mut pin_out = pin_in.into_push_pull_output();
 //!
-//! // Initializubg DHT data transfer
+//! // Initialize DHT data transfer
 //! // Before reading begins MCU must send signal to DHT which would initiate data transfer from DHT.
 //! dht_split_init(&mut pin_out, &mut delay_us);
 //!
@@ -81,13 +81,13 @@ use core::prelude::v1::Result;
 use embedded_hal::digital::v2::{InputPin, OutputPin};
 
 ///
-/// You sould receive this in a case of some upleasant situation.
+/// You should receive this in a case of some unpleasant situation.
 ///
 #[derive(Debug)]
 pub enum DhtError {
     /// Unable to read data from sensor
     Readings,
-    /// Data was read but checksum validation falied
+    /// Data was read but checksum validation failed
     Checksum,
     /// Error reading pin values or acquire pin etc.
     IO,
@@ -213,13 +213,41 @@ pub fn dht_split_init<Error>(
 ///
 /// * `dht` - DHT sensor type
 /// * `input_pin` - Input pin trait for DHT data pin
-/// * `delay_us' - Closure with delay/sleep/whatever API with microseconds as input,
+/// * `delay_us` - Closure with delay/sleep/whatever API with microseconds as input,
 /// NOTE that for low frequency CPUs (about 2Mhz or less) you should pass empty closure.
 ///
 pub fn dht_split_read<Error>(
     dht: DhtType,
     input_pin: &mut dyn InputPin<Error = Error>,
     delay_us: &mut dyn FnMut(u16) -> (),
+) -> Result<DhtValue, DhtError> {
+    let threshold = 20;
+    let rate = 100;
+    // On RPi 3 without delays max "while" cycles per pin state is about 500, initial cycle is about 100
+    // Thus if "while" would stuck at 20*100 cycles on initial cycle it would case an error
+    // or if it would stuck at 500*100 somewhere in the middle.
+    // With delays we should have less than 20 cycles per pin state.
+    dht_split_read_customizable(dht, input_pin, delay_us, threshold, rate)
+}
+
+///
+/// Call this immediately after [initialization](fn.dht_split_init.html) to acquire proper sensor readings.
+///
+/// # Arguments
+///
+/// * `dht` - DHT sensor type
+/// * `input_pin` - Input pin trait for DHT data pin
+/// * `delay_us' - Closure with delay/sleep/whatever API with microseconds as input,
+/// NOTE that for low frequency CPUs (about 2Mhz or less) you should pass empty closure.
+/// * `reads_threshold` - Initial threshold (cycles count) before reading cycle starts.
+/// * `reads_error_rate` - If actual cycles count in one pin state would exceed last threshold at provided rate it would cause an error.
+///
+pub fn dht_split_read_customizable<Error>(
+    dht: DhtType,
+    input_pin: &mut dyn InputPin<Error = Error>,
+    delay_us: &mut dyn FnMut(u16) -> (),
+    reads_threshold: u32,
+    reads_error_rate: u32,
 ) -> Result<DhtValue, DhtError> {
     // Initialize variables
     let mut err: Option<DhtError> = None;
@@ -248,39 +276,41 @@ pub fn dht_split_read<Error>(
 
     // READ to cycles[3+] as low level and cycles[4+] as high level
 
-    // Maximum acceptable count of reading cycles. Considering that one cycle does not complete less in 1-3us.
-    let max_cycles = (50 + 70) * 80 + 80 * 3;
-
-    // Delay in microseconds which should help us to slow down "while" cycles.
-    // If "while" cycle would be faster than 1us it would cause errors because of max_cycles constraint.
-    let delay_us_value = 3;
-
-    let mut i = 0;
-    let mut x = 0;
+    // Initial threshold
+    // If reads cycles count would be more at `reads_error_rate` reading would stop.
+    let mut threshold = reads_threshold;
 
     // As I can see at least 10 instructions should be executed at each cycle.
     // Approximately if CPU frequency is 8MHz and IPC value is 1 than
     // 28us would match to 22 loop cycles without using any delay.
+    // With delay 3us it have to be about 8 cycles.
     // For 1MHz CPU it is about 2 full cycles.
     // NOTICE for slow CPU you should not implement `delay_us` this closure should do nothing.
+    // This delay would a
+    let delay_us_value = 2;
+    let mut i = 0;
     while i < 83 {
         let high = input_pin.is_high().map_err(|_| DhtError::IO)?;
         if (i % 2 == 0) == high {
             // Instead of reading time we just count number of cycles until next level value
             cycles[i] += 1;
+            if high && cycles[i] / threshold > reads_error_rate {
+                // Check errors only on high cycles
+                // When DHT stop transfer data resistor would pull pin up
+                err = Some(DhtError::Readings);
+                break;
+            }
         } else {
+            if high && cycles[i] > threshold {
+                // Raise error threshold dynamically
+                // to adjust this value to current CPU speed
+                threshold = cycles[i];
+            }
             i += 1;
         }
 
-        // Reasonable delay for fast CPU
+        // // Reasonable delay for fast CPU
         delay_us(delay_us_value);
-
-        // Check timeout
-        x += 1;
-        if x > max_cycles {
-            err = Some(DhtError::Readings);
-            break;
-        }
     }
 
     // Inspect pulses and determine which ones are 0 (high state cycle count < low
@@ -299,6 +329,18 @@ pub fn dht_split_read<Error>(
         // cycle count so this must be a zero.  Nothing needs to be changed in the
         // stored data.
     }
+
+    // DEBUG CODE, works only with std enabled
+    // {
+    //     println!(
+    //         "Cycles {:?}",
+    //         cycles
+    //             .iter()
+    //             .map(ToString::to_string)
+    //             .collect::<Vec<String>>()
+    //             .join(", ")
+    //     );
+    // }
 
     // #[cfg(feature = "debug_trace")]
     // {
