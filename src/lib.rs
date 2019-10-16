@@ -4,11 +4,11 @@
 //! using this sensor **is some kind of tricky**.
 //!
 //! DHT use one pin for communication that should work in open drain (open connect) mode.
-//! You should to emulate such pin behaviour for hardware that does not have such pin implementations.
+//! For hardware that does not have such pin implementations you should emulate its behaviour.
 //!
-//! This is there are several approaches to read data:
-//! * you can get readings using single function
-//! * you can use splitted functions for initialization and reading and convert pin to different modes between calls
+//! You can get readings by:
+//! * using single function to read all data
+//! * using splitted functions for initialization and reading while converting pin to different modes between calls
 //!
 //! Should notice that DHT initialization process has some caveats.
 //! There have to be near 1 sec delay before next reading.
