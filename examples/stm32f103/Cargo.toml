@@ -5,11 +5,10 @@ authors = ["Rumato Estorsky <rumatoest@users.noreply.github.com>"]
 edition = "2018"
 doctest = false
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+dht-hal-drv = { version="0.2.1", path  = "../../", features = [] }
 void = {version ="1.0.2", default-features = false }
-dht-hal-drv = { version="0.2.0", path  = "../../", features = [] }
 embedded-hal = { version = "0.2.3", features = ["unproven"] }
 nb = "0.1.2"
 panic-halt = "0.2.0"

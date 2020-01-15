@@ -11,6 +11,7 @@ This driver supports next sensors revisions: DHT11, DHT21, DHT22.
 I have tested it on Raspberry Pi 3 and STM32 Blue Pill board.
 All platform specific implementations are available in examples directory.
 
+
 # Licensing
 
-This software is licensed under MIT license with pickles exception. 
+This product is licenses under **almost MIT license** but with plumbus exception.
