@@ -122,7 +122,7 @@ impl DhtValue {
     /// All raw data from DHT sensor are related to this scale.
     pub fn temperature(&self) -> f32 {
         match &self.dht_type {
-            DHT11 => self.value[2] as f32,
+            DhtType::DHT11 => self.value[2] as f32,
             _ => {
                 let mut v: f32 = (self.value[2] & 0x7F) as f32;
                 v = (v * 256.0 + self.value[3] as f32) * 0.1;
@@ -143,7 +143,7 @@ impl DhtValue {
     /// Return humidity readins in percents.
     pub fn humidity(&self) -> f32 {
         match &self.dht_type {
-            DHT11 => self.value[0] as f32,
+            DhtType::DHT11 => self.value[0] as f32,
             _ => {
                 let mut v: f32 = self.value[0] as f32;
                 v = (v * 256.0 + self.value[1] as f32) * 0.1;
