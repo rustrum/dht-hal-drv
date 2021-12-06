@@ -1,6 +1,6 @@
 [package]
 name = "dht-hal-drv"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2018"
 authors = ["Rumato Estorsky"]
 description = "HAL based driver for digital humidity and temperature sensors DHT11, DHT21, DHT22"
